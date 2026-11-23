@@ -31,10 +31,10 @@ def load_encoder(key, device):
 
 
 @torch.inference_mode()
-def embeddings(key, encoder, images):
+def embeddings(key, encoder, images, image_size=None):
     processor, model = encoder
     images = [ImageOps.exif_transpose(image).convert("RGB") for image in images]
-    side = IMAGE_SIZES[key]
+    side = image_size if image_size is not None else IMAGE_SIZES[key]
     size = {"height": side, "width": side}
     crop = {"crop_size": size} if key == "efficientnet" else {}
     if key == "dinov2":

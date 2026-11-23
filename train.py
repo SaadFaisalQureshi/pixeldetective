@@ -33,17 +33,37 @@ def evaluate(y, predictions):
     }
 
 
-def extract(root, rows, key, batch_size, device):
+def extract(root, rows, key, batch_size, device, image_size=None):
     encoder = load_encoder(key, device)
     batches = []
     for start in range(0, len(rows), batch_size):
         batch = rows[start:start + batch_size]
         with ExitStack() as stack:
             images = [stack.enter_context(Image.open(root / row["path"])) for row in batch]
-            batches.append(embeddings(key, encoder, images))
+            batches.append(embeddings(key, encoder, images, image_size=image_size))
         if start == 0 or (start // batch_size + 1) % 50 == 0:
             print(f"{key}: {min(start + batch_size, len(rows))}/{len(rows)} images", flush=True)
     return np.concatenate(batches)
+
+
+def fit_head(x, y, train, val, key, image_size):
+    _, repo, revision = MODELS[key]
+    best = None
+    scores = {}
+    for c_value in CANDIDATES:
+        candidate = make_pipeline(StandardScaler(), LogisticRegression(C=c_value, max_iter=2000))
+        candidate.fit(x[train], y[train])
+        score = f1_score(y[val], candidate.predict(x[val]), average="macro")
+        scores[c_value] = score
+        if best is None or score > best[0]:
+            best = (score, c_value, candidate)
+    score, c_value, pipeline = best
+    scaler, classifier = pipeline.steps[0][1], pipeline.steps[1][1]
+    weights = classifier.coef_[0] / scaler.scale_
+    head = {"source": [repo, revision], "labels": LABELS,
+            "weights": weights.tolist(), "image_size": image_size,
+            "bias": float(classifier.intercept_[0] - scaler.mean_ @ weights)}
+    return head, score, c_value, scores, pipeline
 
 
 def run(root, output, batch_size):
@@ -84,22 +104,7 @@ def run(root, output, batch_size):
         gc.collect()
         if device == "cuda":
             torch.cuda.empty_cache()
-        best = None
-        scores = {}
-        for c_value in CANDIDATES:
-            candidate = make_pipeline(StandardScaler(), LogisticRegression(C=c_value, max_iter=2000))
-            candidate.fit(x[train], y[train])
-            score = f1_score(y[val], candidate.predict(x[val]), average="macro")
-            scores[c_value] = score
-            if best is None or score > best[0]:
-                best = (score, c_value, candidate)
-        score, c_value, pipeline = best
-        scaler, classifier = pipeline.steps[0][1], pipeline.steps[1][1]
-        weights = classifier.coef_[0] / scaler.scale_
-        head = {"source": [repo, revision], "labels": LABELS,
-                "weights": weights.tolist(), "image_size": IMAGE_SIZES[key],
-                "bias": float(classifier.intercept_[0] - scaler.mean_ @ weights)}
-        # Evaluate the exact exported scoring function used in Gradio.
+        head, score, c_value, scores, pipeline = fit_head(x, y, train, val, key, IMAGE_SIZES[key])
         prediction = probabilities(x[test], head).argmax(axis=1)
         np.testing.assert_array_equal(prediction, pipeline.predict(x[test]))
         test_predictions[key] = prediction
