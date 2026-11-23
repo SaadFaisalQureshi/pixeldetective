@@ -1,4 +1,5 @@
 from hashlib import sha256
+from html import escape
 from io import BytesIO
 import json
 from pathlib import Path
@@ -14,6 +15,31 @@ from score_map import occlusion_scores, overlay
 ARTIFACTS = Path(__file__).resolve().parent / "artifacts"
 MAX_PIXELS = 20_000_000
 st.set_page_config(page_title="PixelDetective", layout="wide")
+
+
+st.markdown("""
+<style>
+[data-testid="stAppViewContainer"] p,
+[data-testid="stAppViewContainer"] label,
+[data-testid="stAppViewContainer"] button,
+[data-testid="stSelectbox"] [data-baseweb="select"] {
+    font-size: 1.15rem;
+}
+[data-testid="stCaptionContainer"] p { color: #283548; font-size: 1rem; }
+[data-testid="stAlert"] { border: 2px solid #34435A; }
+[data-testid="stAlert"] p { font-weight: 600; }
+.projection-table { overflow-x: auto; }
+.projection-table table { width: 100%; border-collapse: collapse; font-size: 1.1rem; }
+.projection-table th, .projection-table td {
+    border: 1px solid #637188;
+    color: #111827;
+    padding: .65rem .75rem;
+    text-align: left;
+}
+.projection-table th { background: #122441; color: #FFFFFF; }
+.projection-table tr:nth-child(even) td { background: #EEF2F8; }
+</style>
+""", unsafe_allow_html=True)
 
 
 @st.cache_resource
@@ -50,10 +76,26 @@ def sensitivity_preview(image, key):
     return overlay(image, grid), grid
 
 
-def percent_table(rows, columns):
-    st.dataframe(
-        rows, hide_index=True,
-        column_config={name: st.column_config.NumberColumn(format="percent") for name in columns},
+def percent_table(rows, columns=()):
+    if not rows:
+        return
+    headings = list(dict.fromkeys(heading for row in rows for heading in row))
+    header = "".join(f'<th scope="col">{escape(name)}</th>' for name in headings)
+    body = []
+    for row in rows:
+        cells = []
+        for heading in headings:
+            value = row.get(heading)
+            if value is None:
+                value = "—"
+            elif heading in columns:
+                value = f"{value:.1%}"
+            cells.append(f"<td>{escape(str(value))}</td>")
+        body.append("<tr>" + "".join(cells) + "</tr>")
+    st.markdown(
+        f'<div class="projection-table"><table><thead><tr>{header}</tr></thead>'
+        f'<tbody>{"".join(body)}</tbody></table></div>',
+        unsafe_allow_html=True,
     )
 
 
@@ -67,7 +109,7 @@ def show_benchmark(report):
         test = entry["test"]
         rows.append({
             "Model": entry["display_name"],
-            "Default": key == selected,
+            "Default": "Yes" if key == selected else "—",
             "Validation macro F1": round(entry["validation_macro_f1"], 3),
             "Test accuracy": test["accuracy"],
             "Test macro F1": round(test["macro_f1"], 3),
@@ -76,7 +118,7 @@ def show_benchmark(report):
         })
     baseline = report["majority_baseline_test"]
     rows.append({
-        "Model": "Majority baseline", "Default": False, "Test accuracy": baseline["accuracy"],
+        "Model": "Majority baseline", "Default": "—", "Test accuracy": baseline["accuracy"],
         "Test macro F1": round(baseline["macro_f1"], 3),
         "Manipulated recall": baseline["classification_report"]["Manipulated"]["recall"],
     })
@@ -84,7 +126,7 @@ def show_benchmark(report):
     matrix_key = st.selectbox("Confusion matrix", list(models), index=list(models).index(selected),
                               format_func=lambda key: models[key]["display_name"])
     matrix = models[matrix_key]["test"]["confusion_matrix"]
-    st.table([{"Actual": label, **{f"Predicted {name.lower()}": count
+    percent_table([{"Actual": label, **{f"Predicted {name.lower()}": count
               for name, count in zip(LABELS, row)}} for label, row in zip(LABELS, matrix)])
     st.caption("Macro F1 gives both classes equal weight. Manipulated recall measures how many edited photos a model catches.")
 
@@ -169,8 +211,8 @@ with analysis:
                         else:
                             st.image(rendered)
                             st.caption(
-                                f"Red means the score fell when covered (up to {100 * largest_drop:.2f} pp). "
-                                f"Blue means it rose (up to {100 * largest_rise:.2f} pp). "
+                                f"− Score fell (orange, up to {100 * largest_drop:.2f} pp). "
+                                f"+ Score rose (blue, up to {100 * largest_rise:.2f} pp). "
                                 "Color intensity is relative to this photo. The map shows score sensitivity."
                             )
 
