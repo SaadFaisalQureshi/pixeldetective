@@ -47,7 +47,7 @@ def sensitivity_preview(image, key):
             return probabilities(embeddings(key, encoder, images), head)[:, 1]
 
         grid = occlusion_scores(image, score)
-    return overlay(image, grid)
+    return overlay(image, grid), grid
 
 
 def percent_table(rows, columns):
@@ -142,8 +142,8 @@ with analysis:
                                 map_failed = True
                         status.update(label="Analysis complete" if not failed else "Analysis incomplete",
                                       state="complete" if not failed else "error")
-                    st.session_state["analysis_result"] = signature, rows, failed, score_image, map_failed
-                previous = st.session_state.get("analysis_result")
+                    st.session_state["analysis_result_v2"] = signature, rows, failed, score_image, map_failed
+                previous = st.session_state.get("analysis_result_v2")
                 if previous and previous[0] == signature:
                     _, rows, failed, score_image, map_failed = previous
                     if failed:
@@ -161,8 +161,18 @@ with analysis:
                         st.error("The score sensitivity map could not be generated.")
                     if score_image is not None:
                         st.subheader("Score sensitivity map")
-                        st.image(score_image)
-                        st.caption("Red marks where covering a tile lowers the manipulation score on the preview. It measures model sensitivity, and the highlighted region may differ from the actual edit.")
+                        rendered, grid = score_image
+                        largest_drop = max(0.0, float(grid.max()))
+                        largest_rise = max(0.0, -float(grid.min()))
+                        if max(largest_drop, largest_rise) < 0.001:
+                            st.info("Covering any tile changed the manipulation score by less than 0.1 percentage points.")
+                        else:
+                            st.image(rendered)
+                            st.caption(
+                                f"Red means the score fell when covered (up to {100 * largest_drop:.2f} pp). "
+                                f"Blue means it rose (up to {100 * largest_rise:.2f} pp). "
+                                "Color intensity is relative to this photo. The map shows score sensitivity."
+                            )
 
 with benchmark:
     show_benchmark(report)

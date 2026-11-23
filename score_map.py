@@ -1,6 +1,6 @@
 """Measure how covering parts of a photo changes its manipulation score."""
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 
 def occlusion_scores(image, predict, grid_size=5):
@@ -21,6 +21,22 @@ def occlusion_scores(image, predict, grid_size=5):
 
 
 def overlay(image, grid):
-    strength = Image.fromarray(np.uint8(np.clip(grid, 0, 1) * 255))
-    alpha = strength.resize(image.size, Image.Resampling.NEAREST).point(lambda value: min(180, 4 * value))
-    return Image.composite(Image.new("RGB", image.size, "#e84c39"), image, alpha)
+    """Render signed score changes using a relative color scale."""
+    rendered = image.convert("RGBA")
+    colors = Image.new("RGBA", image.size)
+    draw = ImageDraw.Draw(colors)
+    rows, columns = grid.shape
+    peak = float(np.abs(grid).max())
+    if peak < 0.001:
+        return image.copy()
+    x_edges = np.linspace(0, image.width, columns + 1, dtype=int)
+    y_edges = np.linspace(0, image.height, rows + 1, dtype=int)
+    for y, row in enumerate(grid):
+        for x, change in enumerate(row):
+            if abs(change) < 0.001:
+                continue
+            color = (234, 62, 42) if change > 0 else (32, 106, 242)
+            opacity = round(190 * abs(change) / peak)
+            draw.rectangle((x_edges[x], y_edges[y], x_edges[x + 1] - 1, y_edges[y + 1] - 1),
+                           fill=(*color, opacity))
+    return Image.alpha_composite(rendered, colors).convert("RGB")
